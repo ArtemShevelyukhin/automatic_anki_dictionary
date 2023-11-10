@@ -6,6 +6,14 @@ from clean import clean_all
 from create_image import create_image_collage
 
 
+class WordInfo:
+    def __init__(self, word_type, definition, example, pronunciation):
+        self.word_type = word_type
+        self.definition = definition
+        self.example = example
+        self.pronunciation = pronunciation
+
+
 def clean_words_txt():
     with open("words.txt", 'w', encoding='utf-8') as wfile:
         wfile.write('')
@@ -32,20 +40,34 @@ def perser_cambrige(headers, cambridge_base_url, cambridge_dict_url, word, rever
     word_url = cambridge_dict_url + word
     response_word = requests.get(word_url, headers=headers)
     soup = BeautifulSoup(response_word.text, "lxml")  # html.parser
-    data = soup.find("div", class_='pr entry-body__el')
 
-    type_word = data.find("span", class_="pos dpos").text
-    definition = data.find("div", class_="def ddef_d db").text
-    try:
-        example_sentence = data.fin("span", class_="eg deg").text
-    except AttributeError:
-        example_sentence = parser_reverso(headers, reverso_dict_url, word)
-    pronunciation = data.find("span", class_="ipa dipa lpr-2 lpl-1").text
-    sound_url = cambridge_base_url + data.find("source", type="audio/mpeg")['src']
+    # "dictionary.cambridge.org" uses multiple dictionaries, here we keep only
+    # "Cambridge Advanced Learner's Dictionary & Thesaurus". We expect that it will be first in the list
+    dictionary = soup.find("div", class_="pr dictionary")
+    word_data_for_all_types = dictionary.findAll("div", class_="pr entry-body__el")
 
+    pronunciation = dictionary.find("span", class_="ipa dipa lpr-2 lpl-1").text
+    sound_url = cambridge_base_url + dictionary.find("source", type="audio/mpeg")['src']
     get_sound_word(sound_url, word, headers)
 
-    return type_word, definition, example_sentence, pronunciation
+    list_of_meanings = []
+    for word_data in word_data_for_all_types:
+        word_type = word_data.find("span", class_="pos dpos").text
+        list_of_different_meanings_for_specific_type = word_data.findAll("div", class_="sense-body dsense_b")
+
+        for meaning_data in list_of_different_meanings_for_specific_type:
+            definition = meaning_data.find("div", class_="def ddef_d db").text
+            try:
+                example_sentences = meaning_data.findAll("span", class_="eg deg")
+            except AttributeError:
+                example_sentences = parser_reverso(headers, reverso_dict_url, word)
+            txt_example = ""
+            for example in example_sentences:
+                example_txt = example.get_text()
+                txt_example += f"* {example_txt} <br>"
+            list_of_meanings.append(WordInfo(word_type, definition, txt_example, pronunciation))
+
+    return list_of_meanings
 
 
 def main():
@@ -95,7 +117,7 @@ def main():
             {
                 'name': 'Card 1',
                 'qfmt': "<div style='font-family: Arial; font-size: 60px;color:#FF80DD;'>{{meaning}}</div><hr><div style='font-family: Arial; font-size: 25px;color:#79005E;'>{{type}}</div>",
-                'afmt': "<div id=answer style='font-family: Arial; color:#FF80DD;'>{{FrontSide}}</div><hr><div  style='font-family: Arial; color:#00aaaa; text-align:left;'>Word: {{word}}</div><div  style='font-family: Arial; color:#00aaaa; text-align:left;'>IPA: {{ipa}}</div><div style='font-family: Arial; font-size: 25px;color:#AB2B52;'>{{sound}}</div><hr><div  style='font-family: Arial; color:#9CFFFA; text-align:left;'>&nbsp;→&nbsp;Example: {{example}}</div><hr>{{pic}}",
+                'afmt': "<div id=answer style='font-family: Arial; color:#FF80DD;'>{{FrontSide}}</div><hr><div  style='font-family: Arial; color:#00aaaa; text-align:left;'>Word: {{word}}</div><div  style='font-family: Arial; color:#00aaaa; text-align:left;'>IPA: {{ipa}}</div><div style='font-family: Arial; font-size: 25px;color:#AB2B52;'>{{sound}}</div><hr><div  style='font-family: Arial; color:#9CFFFA; text-align:left;'>&nbsp;→&nbsp;Examples:<br>{{example}}</div><hr>{{pic}}",
             },
         ],
         css='.card {font-family: arial; font-size: 20px; text-align: center; color: black; background-color: black;}')
@@ -117,35 +139,37 @@ def main():
         for word in lines:
             if word:
                 try:
-                    type_word, definition, example_sentence, pronunciation = perser_cambrige(headers,
-                                                                                             cambridge_base_url,
-                                                                                             cambridge_dict_url, word,
-                                                                                             reverso_dict_url)
+                    list_of_meanings = perser_cambrige(headers,
+                                                       cambridge_base_url,
+                                                       cambridge_dict_url, word,
+                                                       reverso_dict_url)
                 except AttributeError:
                     problem_words.append(word)
                     print("Parsing Error\n")
                     continue
 
-                if create_image_collage(word=word, headers=headers) == False:
-                    problem_words.append(word)
-                    print("Image Error\n")
-                    continue
+                # if create_image_collage(word=word, headers=headers) == False:
+                #     problem_words.append(word)
+                #     print("Image Error\n")
+                #     continue
 
                 face = 'meaning'
-                if face == 'meaning':
-                    my_note = genanki.Note(
-                        model=meaning_model,
-                        fields=[word, type_word, pronunciation, definition, example_sentence,
-                                "[sound:" + word + ".mp3]", "<img src='collage_" + word + ".jpg'>"])
-                else:
-                    my_note = genanki.Note(
-                        model=word_model,
-                        fields=[word, type_word, pronunciation, definition, example_sentence,
-                                "[sound:" + word + ".mp3]", "<img src='collage_" + word + ".jpg'>"])
-                my_deck.add_note(my_note)
-                my_package.media_files.append(word + '.mp3')
-                my_package.media_files.append('collage_' + word + '.jpg')
-                print("Success\n")
+                for meaning in list_of_meanings:
+
+                    if face == 'meaning':
+                        my_note = genanki.Note(
+                            model=meaning_model,
+                            fields=[word, meaning.word_type, meaning.pronunciation, meaning.definition, meaning.example,
+                                    "[sound:" + word + ".mp3]", "<img src='collage_" + word + ".jpg'>"])
+                    else:
+                        my_note = genanki.Note(
+                            model=word_model,
+                            fields=[word, meaning.word_type, meaning.pronunciation, meaning.definition, meaning.example,
+                                    "[sound:" + word + ".mp3]", "<img src='collage_" + word + ".jpg'>"])
+                    my_deck.add_note(my_note)
+                    my_package.media_files.append(word + '.mp3')
+                    # my_package.media_files.append('collage_' + word + '.jpg')
+                    print("Success\n")
 
         if problem_words:
             with open('problem_words.txt', 'a', encoding='utf-8') as afile:
